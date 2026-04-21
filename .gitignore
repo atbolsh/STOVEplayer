@@ -1,0 +1,7 @@
+*.swp
+__pycache__
+*/__pycache__
+.env
+demo_images
+brain_checkpoints
+.ipynb_checkpoints
