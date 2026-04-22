@@ -292,8 +292,12 @@ def main() -> int:
     
     paused = False
     total_score = 0.0
+    episode_score = 0.0
+    balls_caught_this_episode = 0
     running = True
     slow_motion_factor = 4
+    episode_over = False
+    episode_end_reason = ""
     
     try:
         viewer.init()
@@ -303,6 +307,32 @@ def main() -> int:
             
             if events["quit"]:
                 running = False
+                continue
+            
+            # While on the episode-end screen, wait for R (or button) to start new episode
+            if episode_over:
+                if events["reset"]:
+                    key, reset_key = random.split(key)
+                    obs, state = jit_reset(reset_key)
+                    episode_score = 0.0
+                    balls_caught_this_episode = 0
+                    viewer.reset_frame_count()
+                    episode_over = False
+                    print("New episode started")
+                
+                position, rotation = extract_state_info(state)
+                viewer.render(
+                    obs,
+                    score=total_score,
+                    position=position,
+                    rotation=rotation,
+                    paused=True,
+                    mode=args.mode,
+                    overlay_message=f"{episode_end_reason}\n"
+                                    f"Caught {balls_caught_this_episode}/{args.num_balls} balls "
+                                    f"(episode score: {episode_score:.0f})\n\n"
+                                    f"Press R or click Reset for a new room",
+                )
                 continue
                 
             if events["pause_toggle"]:
@@ -314,6 +344,8 @@ def main() -> int:
                 key, reset_key = random.split(key)
                 obs, state = jit_reset(reset_key)
                 total_score = 0.0
+                episode_score = 0.0
+                balls_caught_this_episode = 0
                 viewer.reset_frame_count()
                 print("Environment reset")
                 
@@ -323,6 +355,8 @@ def main() -> int:
             should_step = not paused or events["step_frame"]
             
             if should_step:
+                prev_caught = balls_caught_this_episode
+                
                 if args.mode == "watch":
                     action = Actions.NO_OP
                 elif args.mode == "random":
@@ -330,7 +364,6 @@ def main() -> int:
                     action = random.randint(action_key, (), 0, 5)
                 else:
                     keyboard_action, controls = get_keyboard_action()
-                    # Button clicks override keyboard; keyboard overrides no-op
                     if events["button_action"] is not None:
                         action = events["button_action"]
                     elif keyboard_action is not None:
@@ -351,14 +384,26 @@ def main() -> int:
                 
                 key, step_key = random.split(key)
                 obs, state, reward, done, info = jit_step(step_key, state, action)
-                total_score += float(reward)
+                caught_now = int(float(reward))
+                total_score += caught_now
+                episode_score += caught_now
+                balls_caught_this_episode += caught_now
+                
+                if caught_now > 0:
+                    print(f"  Nice! Caught {caught_now} ball{'s' if caught_now > 1 else ''}! "
+                          f"({balls_caught_this_episode}/{args.num_balls} total)")
                 
                 if done:
-                    print(f"Episode done! Final score: {total_score:.2f}")
-                    key, reset_key = random.split(key)
-                    obs, state = jit_reset(reset_key)
-                    total_score = 0.0
-                    viewer.reset_frame_count()
+                    all_caught = bool(info["all_caught"])
+                    if all_caught:
+                        episode_end_reason = "Congratulations! All balls caught!"
+                        print(f"Congratulations! All {args.num_balls} balls caught! "
+                              f"Episode score: {episode_score:.0f}")
+                    else:
+                        episode_end_reason = "Time's up!"
+                        print(f"Time's up! Caught {balls_caught_this_episode}/{args.num_balls} balls. "
+                              f"Episode score: {episode_score:.0f}")
+                    episode_over = True
             
             position, rotation = extract_state_info(state)
             viewer.render(
@@ -375,7 +420,7 @@ def main() -> int:
     finally:
         viewer.close()
         
-    print(f"Final score: {total_score:.2f}")
+    print(f"Session ended. Total score across all episodes: {total_score:.2f}")
     return 0
 
 

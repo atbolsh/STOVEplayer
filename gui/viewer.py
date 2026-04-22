@@ -286,6 +286,27 @@ class Viewer:
             btn.update_hover(mouse_pos)
             btn.draw(self._screen, self._font, self._small_font)
 
+    def _render_overlay(self, message: str) -> None:
+        """Render a semi-transparent overlay with a multi-line message."""
+        overlay = pygame.Surface((self.GAME_SIZE, self.GAME_SIZE), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 160))
+        self._screen.blit(overlay, (0, 0))
+
+        lines = message.split("\n")
+        line_height = self.HUD_FONT_SIZE + 6
+        total_height = len(lines) * line_height
+        start_y = (self.GAME_SIZE - total_height) // 2
+
+        for i, line in enumerate(lines):
+            if not line.strip():
+                continue
+            text_surf = self._font.render(line.strip(), True, self.HUD_COLOR)
+            text_rect = text_surf.get_rect(
+                centerx=self.GAME_SIZE // 2,
+                y=start_y + i * line_height
+            )
+            self._screen.blit(text_surf, text_rect)
+
     def render(
         self,
         obs: Any,
@@ -293,7 +314,8 @@ class Viewer:
         position: Optional[Tuple[float, float, float]] = None,
         rotation: Optional[float] = None,
         paused: bool = False,
-        mode: str = "play"
+        mode: str = "play",
+        overlay_message: Optional[str] = None,
     ) -> float:
         if not self._initialized:
             self.init()
@@ -308,6 +330,9 @@ class Viewer:
             paused=paused,
             mode=mode
         )
+
+        if overlay_message is not None:
+            self._render_overlay(overlay_message)
 
         self._render_sidebar()
 

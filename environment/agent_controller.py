@@ -26,8 +26,8 @@ class AgentState(NamedTuple):
 
 # Agent physical properties
 AGENT_RADIUS = 0.3
-AGENT_HEIGHT = 1.0
-AGENT_EYE_HEIGHT = 0.8
+AGENT_HEIGHT = 2.0
+AGENT_EYE_HEIGHT = 1.6
 MOVE_SPEED = 0.05
 TURN_SPEED = 0.03
 

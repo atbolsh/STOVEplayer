@@ -16,8 +16,8 @@ FOV = 1.2  # Field of view in radians (~70 degrees)
 WALL_COLOR = jnp.array([0.7, 0.8, 1.0], dtype=jnp.float32)  # Light blue
 FLOOR_COLOR = jnp.array([0.6, 0.5, 0.4], dtype=jnp.float32)  # Brownish
 CEILING_COLOR = jnp.array([0.9, 0.9, 0.95], dtype=jnp.float32)  # White-ish
-MIRROR_TINT = jnp.array([0.7, 1.0, 0.8], dtype=jnp.float32)  # Green tint for reflections
-MIRROR_BORDER_COLOR = jnp.array([0.3, 0.35, 0.4], dtype=jnp.float32)  # Dark frame
+MIRROR_TINT = jnp.array([0.5, 0.9, 0.65], dtype=jnp.float32)  # Stronger green tint
+MIRROR_BORDER_COLOR = jnp.array([0.15, 0.2, 0.15], dtype=jnp.float32)  # Dark green frame
 AGENT_COLOR = jnp.array([0.9, 0.8, 0.7], dtype=jnp.float32)  # Beige
 
 
@@ -210,7 +210,7 @@ def _check_mirror_hit(hit_point: jnp.ndarray, wall_idx: int,
     in_rect = (normalized >= mirror_min) & (normalized <= mirror_max) & height_ok
     
     # Border: within the rect but close to an edge (normalized units)
-    border_w = 0.015
+    border_w = 0.04
     near_left = (normalized - mirror_min) < border_w
     near_right = (mirror_max - normalized) < border_w
     near_bottom = (height_norm - height_min) < border_w

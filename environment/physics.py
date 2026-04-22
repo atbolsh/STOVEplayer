@@ -59,66 +59,62 @@ def create_balls(key: jax.random.PRNGKey, num_balls: int,
 
 
 def _ball_ball_collision(positions: jnp.ndarray, velocities: jnp.ndarray,
-                         active: jnp.ndarray) -> jnp.ndarray:
+                         active: jnp.ndarray) -> tuple:
     """Handle elastic collisions between balls.
     
     Returns:
-        Updated velocities
+        (updated_positions, updated_velocities) with overlap separation
     """
     num_balls = positions.shape[0]
+    min_dist = 2 * BALL_RADIUS
     
     def collision_pair(carry, idx):
-        vels = carry
+        pos, vels = carry
         i = idx // num_balls
         j = idx % num_balls
         
-        # Only process if i < j and both active
         should_process = (i < j) & active[i] & active[j]
         
-        pos_i = positions[i]
-        pos_j = positions[j]
+        pos_i = pos[i]
+        pos_j = pos[j]
         vel_i = vels[i]
         vel_j = vels[j]
         
-        # Distance between centers
         diff = pos_i - pos_j
         dist = jnp.linalg.norm(diff)
         
-        # Check if colliding
-        colliding = (dist < 2 * BALL_RADIUS) & should_process
+        colliding = (dist < min_dist) & should_process
         
-        # Elastic collision (same mass)
         normal = diff / (dist + 1e-8)
         rel_vel = vel_i - vel_j
         rel_speed = jnp.dot(rel_vel, normal)
         
-        # Only collide if approaching
+        # Reflect velocity (elastic, equal mass)
         should_collide = colliding & (rel_speed > 0)
+        new_vel_i = jnp.where(should_collide, vel_i - rel_speed * normal, vel_i)
+        new_vel_j = jnp.where(should_collide, vel_j + rel_speed * normal, vel_j)
         
-        # Update velocities
-        new_vel_i = jax.lax.cond(
-            should_collide,
-            lambda: vel_i - rel_speed * normal,
-            lambda: vel_i,
-        )
-        new_vel_j = jax.lax.cond(
-            should_collide,
-            lambda: vel_j + rel_speed * normal,
-            lambda: vel_j,
-        )
+        # Push overlapping balls apart so they no longer intersect
+        overlap = min_dist - dist
+        should_separate = colliding & (overlap > 0)
+        half_push = jnp.where(should_separate, overlap / 2 + 1e-4, 0.0)
+        new_pos_i = pos_i + normal * half_push
+        new_pos_j = pos_j - normal * half_push
         
+        pos = pos.at[i].set(jnp.where(colliding, new_pos_i, pos_i))
+        pos = pos.at[j].set(jnp.where(colliding, new_pos_j, pos_j))
         vels = vels.at[i].set(new_vel_i)
         vels = vels.at[j].set(new_vel_j)
         
-        return vels, None
+        return (pos, vels), None
     
-    velocities, _ = jax.lax.scan(
+    (positions, velocities), _ = jax.lax.scan(
         collision_pair, 
-        velocities, 
+        (positions, velocities), 
         jnp.arange(num_balls * num_balls)
     )
     
-    return velocities
+    return positions, velocities
 
 
 def _ball_wall_collision(positions: jnp.ndarray, velocities: jnp.ndarray,
@@ -232,8 +228,8 @@ def update_balls(balls: BallState, agent: AgentState,
     # Move balls
     positions = positions + velocities
     
-    # Ball-ball collisions
-    velocities = _ball_ball_collision(positions, velocities, active)
+    # Ball-ball collisions (also separates overlapping balls)
+    positions, velocities = _ball_ball_collision(positions, velocities, active)
     
     # Ball-wall collisions
     positions, velocities = _ball_wall_collision(positions, velocities, 
