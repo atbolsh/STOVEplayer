@@ -18,7 +18,7 @@ from typing import Tuple, NamedTuple, Optional
 from tqdm import tqdm
 import time
 
-from nextPlayer.environment import BallCatchEnv
+from nextPlayer.environment import BallCatchEnv, EnvParams
 from nextPlayer.agent.modSTOVE import ModSTOVE, create_modstove
 
 
@@ -278,8 +278,10 @@ def train(config: TrainConfig):
     # Initialize RNG
     key = jax.random.PRNGKey(config.seed)
     
-    # Create environment
-    env = BallCatchEnv(num_balls=config.num_balls)
+    # Create environment with JIT-compiled step/reset
+    env = BallCatchEnv(EnvParams(num_balls=config.num_balls))
+    env.step = jax.jit(env.step)
+    env.reset = jax.jit(env.reset)
     print(f"Environment created with {config.num_balls} balls")
     
     # Create model

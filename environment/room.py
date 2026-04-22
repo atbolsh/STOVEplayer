@@ -17,6 +17,7 @@ WALL_COLOR = jnp.array([0.7, 0.8, 1.0], dtype=jnp.float32)  # Light blue
 FLOOR_COLOR = jnp.array([0.6, 0.5, 0.4], dtype=jnp.float32)  # Brownish
 CEILING_COLOR = jnp.array([0.9, 0.9, 0.95], dtype=jnp.float32)  # White-ish
 MIRROR_TINT = jnp.array([0.7, 1.0, 0.8], dtype=jnp.float32)  # Green tint for reflections
+MIRROR_BORDER_COLOR = jnp.array([0.3, 0.35, 0.4], dtype=jnp.float32)  # Dark frame
 AGENT_COLOR = jnp.array([0.9, 0.8, 0.7], dtype=jnp.float32)  # Beige
 
 
@@ -176,8 +177,8 @@ def _ray_cylinder_intersect(ray_origin: jnp.ndarray, ray_dir: jnp.ndarray,
 
 
 def _check_mirror_hit(hit_point: jnp.ndarray, wall_idx: int,
-                      room: RoomState) -> jnp.ndarray:
-    """Check if a hit point on a wall is within a mirror.
+                      room: RoomState) -> tuple:
+    """Check if a hit point on a wall is within a mirror or its border.
     
     Args:
         hit_point: 3D hit point
@@ -185,7 +186,7 @@ def _check_mirror_hit(hit_point: jnp.ndarray, wall_idx: int,
         room: Room state
     
     Returns:
-        Boolean indicating if hit is on mirror
+        (in_mirror, on_border) booleans
     """
     has_mirror = room.mirror_walls[wall_idx]
     mirror_min = room.mirror_positions[wall_idx, 0]
@@ -201,12 +202,25 @@ def _check_mirror_hit(hit_point: jnp.ndarray, wall_idx: int,
     half_extent = wall_extent / 2
     normalized = (coord + half_extent) / wall_extent
     
-    # Check height (mirror covers middle portion)
-    height_ok = (hit_point[1] > room.height * 0.2) & (hit_point[1] < room.height * 0.8)
+    height_norm = hit_point[1] / room.height
+    height_min = 0.2
+    height_max = 0.8
     
-    in_mirror = has_mirror & (normalized >= mirror_min) & (normalized <= mirror_max) & height_ok
+    height_ok = (height_norm > height_min) & (height_norm < height_max)
+    in_rect = (normalized >= mirror_min) & (normalized <= mirror_max) & height_ok
     
-    return in_mirror
+    # Border: within the rect but close to an edge (normalized units)
+    border_w = 0.015
+    near_left = (normalized - mirror_min) < border_w
+    near_right = (mirror_max - normalized) < border_w
+    near_bottom = (height_norm - height_min) < border_w
+    near_top = (height_max - height_norm) < border_w
+    on_border = in_rect & (near_left | near_right | near_bottom | near_top)
+    
+    in_mirror = has_mirror & in_rect & ~on_border
+    on_border = has_mirror & on_border
+    
+    return in_mirror, on_border
 
 
 def _trace_ray(ray_origin: jnp.ndarray, ray_dir: jnp.ndarray,
@@ -231,6 +245,7 @@ def _trace_ray(ray_origin: jnp.ndarray, ray_dir: jnp.ndarray,
     best_t = jnp.array(1e10, dtype=jnp.float32)
     best_color = jnp.zeros(3, dtype=jnp.float32)
     hit_mirror = jnp.array(False)
+    mirror_t = jnp.array(1e10, dtype=jnp.float32)
     mirror_normal = jnp.zeros(3, dtype=jnp.float32)
     hit_point = jnp.zeros(3, dtype=jnp.float32)
     
@@ -264,11 +279,13 @@ def _trace_ray(ray_origin: jnp.ndarray, ray_dir: jnp.ndarray,
     hp = ray_origin + wall_t * ray_dir
     in_bounds = (hp[1] >= 0) & (hp[1] <= room.height) & (hp[2] >= min_z) & (hp[2] <= max_z)
     wall_hit = wall_hit & in_bounds & (wall_t < best_t)
-    is_mirror = _check_mirror_hit(hp, 0, room)
+    is_mirror, on_border = _check_mirror_hit(hp, 0, room)
+    wall_color = jnp.where(wall_hit & on_border, MIRROR_BORDER_COLOR, WALL_COLOR)
     
     best_t = jnp.where(wall_hit, wall_t, best_t)
-    best_color = jnp.where(wall_hit, WALL_COLOR, best_color)
+    best_color = jnp.where(wall_hit, wall_color, best_color)
     hit_mirror = jnp.where(wall_hit & is_mirror, True, hit_mirror)
+    mirror_t = jnp.where(wall_hit & is_mirror, wall_t, mirror_t)
     mirror_normal = jnp.where(wall_hit & is_mirror, wall_normal, mirror_normal)
     hit_point = jnp.where(wall_hit & is_mirror, hp, hit_point)
     
@@ -281,11 +298,13 @@ def _trace_ray(ray_origin: jnp.ndarray, ray_dir: jnp.ndarray,
     hp = ray_origin + wall_t * ray_dir
     in_bounds = (hp[1] >= 0) & (hp[1] <= room.height) & (hp[2] >= min_z) & (hp[2] <= max_z)
     wall_hit = wall_hit & in_bounds & (wall_t < best_t)
-    is_mirror = _check_mirror_hit(hp, 1, room)
+    is_mirror, on_border = _check_mirror_hit(hp, 1, room)
+    wall_color = jnp.where(wall_hit & on_border, MIRROR_BORDER_COLOR, WALL_COLOR)
     
     best_t = jnp.where(wall_hit, wall_t, best_t)
-    best_color = jnp.where(wall_hit, WALL_COLOR, best_color)
+    best_color = jnp.where(wall_hit, wall_color, best_color)
     hit_mirror = jnp.where(wall_hit & is_mirror, True, hit_mirror)
+    mirror_t = jnp.where(wall_hit & is_mirror, wall_t, mirror_t)
     mirror_normal = jnp.where(wall_hit & is_mirror, wall_normal, mirror_normal)
     hit_point = jnp.where(wall_hit & is_mirror, hp, hit_point)
     
@@ -298,11 +317,13 @@ def _trace_ray(ray_origin: jnp.ndarray, ray_dir: jnp.ndarray,
     hp = ray_origin + wall_t * ray_dir
     in_bounds = (hp[1] >= 0) & (hp[1] <= room.height) & (hp[0] >= min_x) & (hp[0] <= max_x)
     wall_hit = wall_hit & in_bounds & (wall_t < best_t)
-    is_mirror = _check_mirror_hit(hp, 2, room)
+    is_mirror, on_border = _check_mirror_hit(hp, 2, room)
+    wall_color = jnp.where(wall_hit & on_border, MIRROR_BORDER_COLOR, WALL_COLOR)
     
     best_t = jnp.where(wall_hit, wall_t, best_t)
-    best_color = jnp.where(wall_hit, WALL_COLOR, best_color)
+    best_color = jnp.where(wall_hit, wall_color, best_color)
     hit_mirror = jnp.where(wall_hit & is_mirror, True, hit_mirror)
+    mirror_t = jnp.where(wall_hit & is_mirror, wall_t, mirror_t)
     mirror_normal = jnp.where(wall_hit & is_mirror, wall_normal, mirror_normal)
     hit_point = jnp.where(wall_hit & is_mirror, hp, hit_point)
     
@@ -315,11 +336,13 @@ def _trace_ray(ray_origin: jnp.ndarray, ray_dir: jnp.ndarray,
     hp = ray_origin + wall_t * ray_dir
     in_bounds = (hp[1] >= 0) & (hp[1] <= room.height) & (hp[0] >= min_x) & (hp[0] <= max_x)
     wall_hit = wall_hit & in_bounds & (wall_t < best_t)
-    is_mirror = _check_mirror_hit(hp, 3, room)
+    is_mirror, on_border = _check_mirror_hit(hp, 3, room)
+    wall_color = jnp.where(wall_hit & on_border, MIRROR_BORDER_COLOR, WALL_COLOR)
     
     best_t = jnp.where(wall_hit, wall_t, best_t)
-    best_color = jnp.where(wall_hit, WALL_COLOR, best_color)
+    best_color = jnp.where(wall_hit, wall_color, best_color)
     hit_mirror = jnp.where(wall_hit & is_mirror, True, hit_mirror)
+    mirror_t = jnp.where(wall_hit & is_mirror, wall_t, mirror_t)
     mirror_normal = jnp.where(wall_hit & is_mirror, wall_normal, mirror_normal)
     hit_point = jnp.where(wall_hit & is_mirror, hp, hit_point)
     
@@ -362,6 +385,9 @@ def _trace_ray(ray_origin: jnp.ndarray, ray_dir: jnp.ndarray,
     
     best_t = jnp.where(agent_hit, agent_t, best_t)
     best_color = jnp.where(agent_hit, agent_color, best_color)
+    
+    # If something (ball, agent) is closer than the mirror, don't reflect
+    hit_mirror = hit_mirror & (best_t >= mirror_t)
     
     return best_color, best_t, hit_mirror, mirror_normal, hit_point
 
