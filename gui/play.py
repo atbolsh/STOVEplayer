@@ -33,7 +33,7 @@ except ImportError:
     print("Error: JAX is required. Install with: pip install jax jaxlib")
     sys.exit(1)
 
-from nextPlayer.environment import BallCatchEnv
+from nextPlayer.environment import BallCatchEnv, EnvParams
 from nextPlayer.gui.viewer import Viewer
 
 
@@ -137,8 +137,11 @@ def get_keyboard_action(slow_motion: bool = False) -> Tuple[Optional[int], dict]
     }
 
 
-def process_events() -> dict:
+def process_events(viewer: "Viewer") -> dict:
     """Process pygame events and return control signals.
+    
+    Args:
+        viewer: Viewer instance, used for button hit-testing on mouse clicks.
     
     Returns:
         Dictionary with control signals:
@@ -147,13 +150,15 @@ def process_events() -> dict:
         - pause_toggle: Should toggle pause
         - debug_info: Should print debug info
         - step_frame: Should step one frame (when paused)
+        - button_action: action int from a sidebar button click, or None
     """
     events = {
         "quit": False,
         "reset": False,
         "pause_toggle": False,
         "debug_info": False,
-        "step_frame": False
+        "step_frame": False,
+        "button_action": None,
     }
     
     for event in pygame.event.get():
@@ -170,6 +175,30 @@ def process_events() -> dict:
                 events["debug_info"] = True
             elif event.key == pygame.K_n:
                 events["step_frame"] = True
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            viewer.handle_mouse_click(event.pos)
+
+    BUTTON_TO_ACTION = {
+        "move_forward": Actions.MOVE_FORWARD,
+        "stop_moving":  Actions.STOP_MOVING,
+        "turn_left":    Actions.TURN_LEFT,
+        "turn_right":   Actions.TURN_RIGHT,
+        "stop_turning": Actions.STOP_TURNING,
+    }
+
+    for click_id in viewer.pop_button_clicks():
+        if click_id in BUTTON_TO_ACTION:
+            events["button_action"] = BUTTON_TO_ACTION[click_id]
+        elif click_id == "quit":
+            events["quit"] = True
+        elif click_id == "reset":
+            events["reset"] = True
+        elif click_id == "pause_toggle":
+            events["pause_toggle"] = True
+        elif click_id == "debug_info":
+            events["debug_info"] = True
+        elif click_id == "step_frame":
+            events["step_frame"] = True
                 
     return events
 
@@ -246,10 +275,18 @@ def main() -> int:
     
     key = random.PRNGKey(args.seed)
     
-    env = BallCatchEnv(num_balls=args.num_balls)
+    env = BallCatchEnv(EnvParams(num_balls=args.num_balls))
+    jit_step = jax.jit(env.step)
+    jit_reset = jax.jit(env.reset)
     
+    print("Compiling JIT kernels (first run only)...")
     key, reset_key = random.split(key)
-    obs, state = env.reset(reset_key)
+    obs, state = jit_reset(reset_key)
+    
+    # Warmup: run one step so step kernel is also compiled before game loop
+    key, warmup_key = random.split(key)
+    _ = jit_step(warmup_key, state, Actions.NO_OP)
+    print("Ready!\n")
     
     viewer = Viewer(fps=args.fps, title=f"BallCatch - {args.mode.capitalize()} Mode")
     
@@ -262,7 +299,7 @@ def main() -> int:
         viewer.init()
         
         while running:
-            events = process_events()
+            events = process_events(viewer)
             
             if events["quit"]:
                 running = False
@@ -270,11 +307,12 @@ def main() -> int:
                 
             if events["pause_toggle"]:
                 paused = not paused
+                viewer.set_pause_state(paused)
                 print(f"{'Paused' if paused else 'Resumed'}")
                 
             if events["reset"]:
                 key, reset_key = random.split(key)
-                obs, state = env.reset(reset_key)
+                obs, state = jit_reset(reset_key)
                 total_score = 0.0
                 viewer.reset_frame_count()
                 print("Environment reset")
@@ -292,7 +330,13 @@ def main() -> int:
                     action = random.randint(action_key, (), 0, 5)
                 else:
                     keyboard_action, controls = get_keyboard_action()
-                    action = keyboard_action if keyboard_action is not None else Actions.NO_OP
+                    # Button clicks override keyboard; keyboard overrides no-op
+                    if events["button_action"] is not None:
+                        action = events["button_action"]
+                    elif keyboard_action is not None:
+                        action = keyboard_action
+                    else:
+                        action = Actions.NO_OP
                     
                     if controls["slow_motion"]:
                         for _ in range(slow_motion_factor - 1):
@@ -306,13 +350,13 @@ def main() -> int:
                             )
                 
                 key, step_key = random.split(key)
-                obs, state, reward, done, info = env.step(step_key, state, action)
+                obs, state, reward, done, info = jit_step(step_key, state, action)
                 total_score += float(reward)
                 
                 if done:
                     print(f"Episode done! Final score: {total_score:.2f}")
                     key, reset_key = random.split(key)
-                    obs, state = env.reset(reset_key)
+                    obs, state = jit_reset(reset_key)
                     total_score = 0.0
                     viewer.reset_frame_count()
             
