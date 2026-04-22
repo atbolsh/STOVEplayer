@@ -1,0 +1,8 @@
+# Minimal dependencies for running the player-facing GUI only (no training).
+# Installs CPU-only JAX to avoid CUDA setup headaches.
+#
+# Usage:  pip install -r requirements_environment.txt
+# Launch: python -m nextPlayer.gui.play
+jax>=0.4.30
+numpy>=1.24.0
+pygame>=2.5.0
