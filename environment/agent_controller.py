@@ -30,6 +30,8 @@ AGENT_HEIGHT = 2.0
 AGENT_EYE_HEIGHT = 1.6
 MOVE_SPEED = 0.05
 TURN_SPEED = 0.03
+# Camera must stay this far from walls to avoid FOV clipping at corners
+WALL_MARGIN = 0.6
 
 
 def create_agent(x: float = 0.0, y: float = 0.0, z: float = 0.0, 
@@ -110,11 +112,20 @@ def update_agent(agent: AgentState, room_bounds: tuple) -> AgentState:
         lambda: agent.z,
     )
     
-    # Clamp to room bounds (with margin for agent radius)
-    new_x = jnp.clip(new_x, min_x + AGENT_RADIUS, max_x - AGENT_RADIUS)
-    new_z = jnp.clip(new_z, min_z + AGENT_RADIUS, max_z - AGENT_RADIUS)
+    # Clamp to room bounds with enough margin to prevent camera FOV clipping
+    new_x = jnp.clip(new_x, min_x + WALL_MARGIN, max_x - WALL_MARGIN)
+    new_z = jnp.clip(new_z, min_z + WALL_MARGIN, max_z - WALL_MARGIN)
     
-    return agent._replace(x=new_x, z=new_z, yaw=new_yaw)
+    # Stop forward movement when pressed against a wall
+    hit_wall = (
+        (new_x <= min_x + WALL_MARGIN) |
+        (new_x >= max_x - WALL_MARGIN) |
+        (new_z <= min_z + WALL_MARGIN) |
+        (new_z >= max_z - WALL_MARGIN)
+    )
+    new_moving = agent.moving & ~hit_wall
+    
+    return agent._replace(x=new_x, z=new_z, yaw=new_yaw, moving=new_moving)
 
 
 def get_camera_params(agent: AgentState) -> tuple:
