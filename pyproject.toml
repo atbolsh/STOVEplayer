@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nextPlayer"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[tool.setuptools]
+packages = [
+    "nextPlayer",
+    "nextPlayer.environment",
+    "nextPlayer.gui",
+    "nextPlayer.agent",
+    "nextPlayer.agent.modSTOVE",
+]
+
+[tool.setuptools.package-dir]
+nextPlayer = "."

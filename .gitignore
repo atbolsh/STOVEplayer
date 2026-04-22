@@ -5,3 +5,4 @@ __pycache__
 demo_images
 brain_checkpoints
 .ipynb_checkpoints
+nextPlayer.egg-info
