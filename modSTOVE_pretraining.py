@@ -30,7 +30,7 @@ CHECKPOINT_DIR = os.path.join(os.path.dirname(__file__), "checkpoints")
 
 class TrainConfig(NamedTuple):
     """Training configuration."""
-    batch_size: int = 4096
+    batch_size: int = 256
     clip_length: int = 8
     learning_rate: float = 2e-4
     lr_warmup_steps: int = 1000
