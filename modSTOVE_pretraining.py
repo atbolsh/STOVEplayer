@@ -10,16 +10,22 @@ Batch generation strategy:
 This teaches modSTOVE both passive observation and action-conditioned prediction.
 """
 
+import os
+import glob
+
 import jax
 import jax.numpy as jnp
 import optax
 from flax.training import train_state
+from flax import serialization
 from typing import Tuple, NamedTuple, Optional
 from tqdm import tqdm
 import time
 
 from nextPlayer.environment import BallCatchEnv, EnvParams
 from nextPlayer.agent.modSTOVE import ModSTOVE, create_modstove
+
+CHECKPOINT_DIR = os.path.join(os.path.dirname(__file__), "checkpoints")
 
 
 class TrainConfig(NamedTuple):
@@ -32,8 +38,6 @@ class TrainConfig(NamedTuple):
     weight_decay: float = 0.01
     max_steps: int = 100000
     log_interval: int = 100
-    save_interval: int = 10000
-    eval_interval: int = 1000
     num_balls: int = 5
     seed: int = 42
 
@@ -44,6 +48,79 @@ class BatchData(NamedTuple):
     actions: jnp.ndarray     # [batch, clip_length]
     action_mask: jnp.ndarray # [batch, clip_length] - 1 where action applied
     is_static: jnp.ndarray   # [batch] - 1 if static batch, 0 if action batch
+
+
+def save_checkpoint(state: train_state.TrainState, step: int,
+                    config: TrainConfig) -> str:
+    """Save a checkpoint and return the file path."""
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    prefix = f"modstove_b{config.num_balls}_lr{config.learning_rate:.0e}"
+    path = os.path.join(CHECKPOINT_DIR, f"{prefix}_step{step:07d}.ckpt")
+    with open(path, "wb") as f:
+        f.write(serialization.to_bytes(state))
+    return path
+
+
+def cleanup_checkpoints(step: int, config: TrainConfig) -> None:
+    """Apply logarithmic retention: after saving at `step`, delete old checkpoints
+    that no longer fall on a retention boundary.
+
+    Retention tiers (checked from coarsest to finest):
+      - Every 100_000 steps: always kept
+      - Every  10_000 steps: kept while step < 100_000
+      - Every   1_000 steps: kept while step <  10_000
+      - Every     100 steps: kept while step <   1_000
+    Anything that doesn't match a tier for its range is deleted.
+    """
+    prefix = f"modstove_b{config.num_balls}_lr{config.learning_rate:.0e}"
+    pattern = os.path.join(CHECKPOINT_DIR, f"{prefix}_step*.ckpt")
+
+    for path in glob.glob(pattern):
+        fname = os.path.basename(path)
+        try:
+            ckpt_step = int(fname.split("_step")[1].split(".ckpt")[0])
+        except (IndexError, ValueError):
+            continue
+
+        if ckpt_step == step:
+            continue
+
+        keep = False
+        if ckpt_step % 100_000 == 0:
+            keep = True
+        elif ckpt_step % 10_000 == 0 and step < 100_000:
+            keep = True
+        elif ckpt_step % 1_000 == 0 and step < 10_000:
+            keep = True
+        elif ckpt_step % 100 == 0 and step < 1_000:
+            keep = True
+
+        if not keep:
+            os.remove(path)
+
+
+def load_latest_checkpoint(state: train_state.TrainState,
+                           config: TrainConfig) -> Tuple[train_state.TrainState, int]:
+    """Load the most recent checkpoint if one exists.
+
+    Returns:
+        (restored_state, step) or (original_state, 0) if no checkpoint found.
+    """
+    prefix = f"modstove_b{config.num_balls}_lr{config.learning_rate:.0e}"
+    pattern = os.path.join(CHECKPOINT_DIR, f"{prefix}_step*.ckpt")
+    files = sorted(glob.glob(pattern))
+    if not files:
+        return state, 0
+
+    latest = files[-1]
+    fname = os.path.basename(latest)
+    ckpt_step = int(fname.split("_step")[1].split(".ckpt")[0])
+
+    with open(latest, "rb") as f:
+        state = serialization.from_bytes(state, f.read())
+
+    print(f"Resumed from checkpoint: {fname} (step {ckpt_step})")
+    return state, ckpt_step
 
 
 def create_optimizer(config: TrainConfig):
@@ -304,11 +381,16 @@ def train(config: TrainConfig):
         tx=optimizer,
     )
     
+    # Resume from checkpoint if available
+    state, start_step = load_latest_checkpoint(state, config)
+    
     # Training loop
-    print("\nStarting training...")
+    print(f"\nStarting training from step {start_step}...")
+    print(f"Checkpoints: {CHECKPOINT_DIR}")
     start_time = time.time()
     
-    for step in tqdm(range(config.max_steps), desc="Training"):
+    for step in tqdm(range(start_step, config.max_steps), desc="Training",
+                     initial=start_step, total=config.max_steps):
         # Generate batch
         key, batch_key, step_key = jax.random.split(key, 3)
         batch = generate_batch(batch_key, env, config.batch_size, config.clip_length)
@@ -319,7 +401,8 @@ def train(config: TrainConfig):
         # Logging
         if step % config.log_interval == 0:
             elapsed = time.time() - start_time
-            steps_per_sec = step / elapsed if elapsed > 0 else 0
+            steps_done = step - start_step
+            steps_per_sec = steps_done / elapsed if elapsed > 0 else 0
             tqdm.write(
                 f"Step {step:6d} | "
                 f"Loss: {metrics['total_loss']:.4f} | "
@@ -327,12 +410,16 @@ def train(config: TrainConfig):
                 f"Steps/s: {steps_per_sec:.1f}"
             )
         
-        # Save checkpoint
-        if step > 0 and step % config.save_interval == 0:
-            # TODO: Implement checkpoint saving
-            tqdm.write(f"Checkpoint at step {step}")
+        # Save checkpoint every 100 steps, then prune old ones
+        if step > 0 and step % 100 == 0:
+            path = save_checkpoint(state, step, config)
+            cleanup_checkpoints(step, config)
+            if step % 1000 == 0:
+                tqdm.write(f"Checkpoint saved: {os.path.basename(path)}")
     
-    print("\nTraining complete!")
+    # Final checkpoint
+    path = save_checkpoint(state, config.max_steps, config)
+    print(f"\nTraining complete! Final checkpoint: {os.path.basename(path)}")
     print(f"Total time: {time.time() - start_time:.1f}s")
     
     return state, model
