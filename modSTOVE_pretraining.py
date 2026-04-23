@@ -276,6 +276,9 @@ def compute_loss(
     """
     batch_size, clip_length = batch.images.shape[:2]
     
+    # Split RNG for encode and dynamics calls
+    key_encode, key_dynamics = jax.random.split(key)
+    
     # Encode all frames
     # Reshape to [batch * clip_length, 128, 128, 3]
     flat_images = batch.images.reshape(-1, 128, 128, 3)
@@ -285,6 +288,7 @@ def compute_loss(
         params,
         flat_images,
         method=model.encode,
+        rngs={'sample': key_encode},
     )
     
     # Reshape back to [batch, clip_length, num_slots, slot_dim]
@@ -302,11 +306,13 @@ def compute_loss(
         action_onehot = jax.nn.one_hot(action, 5)  # [batch, 5]
         
         # Predict next slots
+        key_dynamics, subkey = jax.random.split(key_dynamics)
         pred_next = model.apply(
             params,
             current_slots,
             action_onehot,
             method=model.predict_next,
+            rngs={'sample': subkey},
         )
         
         # MSE loss on slot predictions
