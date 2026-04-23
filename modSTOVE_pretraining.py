@@ -30,7 +30,7 @@ CHECKPOINT_DIR = os.path.join(os.path.dirname(__file__), "checkpoints")
 
 class TrainConfig(NamedTuple):
     """Training configuration."""
-    batch_size: int = 128
+    batch_size: int = 384
     clip_length: int = 8
     learning_rate: float = 2e-4
     lr_warmup_steps: int = 1000
@@ -454,7 +454,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Pretrain modSTOVE")
-    parser.add_argument('--batch-size', type=int, default=128)
+    parser.add_argument('--batch-size', type=int, default=36)
     parser.add_argument('--clip-length', type=int, default=8)
     parser.add_argument('--lr', type=float, default=2e-4)
     parser.add_argument('--max-steps', type=int, default=100000)
