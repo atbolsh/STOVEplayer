@@ -285,7 +285,7 @@ def compute_loss(
     
     # Get slots for all frames
     slots, attn, raw_slots = model.apply(
-        params,
+        {'params': params},
         flat_images,
         method=model.encode,
         rngs={'sample': key_encode},
@@ -308,7 +308,7 @@ def compute_loss(
         # Predict next slots
         key_dynamics, subkey = jax.random.split(key_dynamics)
         pred_next = model.apply(
-            params,
+            {'params': params},
             current_slots,
             action_onehot,
             method=model.predict_next,
@@ -369,12 +369,21 @@ def train(config: TrainConfig):
     print(f"Environment created with {config.num_balls} balls")
     
     # Create model
-    key, model_key = jax.random.split(key)
+    key, init_key, sample_key = jax.random.split(key, 3)
     model = create_modstove()
     
-    # Initialize model
-    dummy_image = jnp.zeros((1, 128, 128, 3))
-    params = model.init(model_key, dummy_image, method=model.encode)
+    # Initialize ALL model parameters (encoder + dynamics) via __call__
+    dummy_images = jnp.zeros((1, 128, 128, 3))
+    dummy_actions = jnp.zeros((1,), dtype=jnp.int32)
+    dummy_next = jnp.zeros((1, 128, 128, 3))
+    variables = model.init(
+        {'params': init_key, 'sample': sample_key},
+        dummy_images,
+        actions=dummy_actions,
+        next_images=dummy_next,
+        deterministic=False,
+    )
+    params = variables['params']
     
     # Count parameters
     param_count = sum(x.size for x in jax.tree_util.tree_leaves(params))
