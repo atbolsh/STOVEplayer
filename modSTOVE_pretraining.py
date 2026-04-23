@@ -30,7 +30,7 @@ CHECKPOINT_DIR = os.path.join(os.path.dirname(__file__), "checkpoints")
 
 class TrainConfig(NamedTuple):
     """Training configuration."""
-    batch_size: int = 32
+    batch_size: int = 36
     clip_length: int = 8
     learning_rate: float = 2e-4
     lr_warmup_steps: int = 1000
@@ -400,6 +400,14 @@ def train(config: TrainConfig):
     # Resume from checkpoint if available
     state, start_step = load_latest_checkpoint(state, config)
     
+    # CUDA warmup: run one dummy step so the first real step isn't penalized
+    print("Warming up CUDA kernels...")
+    key, warmup_batch_key, warmup_step_key = jax.random.split(key, 3)
+    warmup_batch = generate_batch(warmup_batch_key, env, config.batch_size, config.clip_length)
+    _state, _metrics = train_step(state, warmup_batch, warmup_step_key, model=model)
+    jax.block_until_ready(_metrics)
+    del _state, _metrics, warmup_batch
+
     # Training loop
     print(f"\nStarting training from step {start_step}...")
     print(f"Checkpoints: {CHECKPOINT_DIR}")
@@ -446,7 +454,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Pretrain modSTOVE")
-    parser.add_argument('--batch-size', type=int, default=32)
+    parser.add_argument('--batch-size', type=int, default=36)
     parser.add_argument('--clip-length', type=int, default=8)
     parser.add_argument('--lr', type=float, default=2e-4)
     parser.add_argument('--max-steps', type=int, default=100000)
