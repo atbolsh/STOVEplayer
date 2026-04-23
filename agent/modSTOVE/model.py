@@ -27,6 +27,7 @@ from functools import partial
 from .image_model import ImageEncoder, ImageEncoderWithNorm
 from .slot_encoder import SlotEncoder, TemporalSlotEncoder, POS_SLICE, VEL_SLICE, SIZE_SLICE, LATENT_SLICE, NUM_SLOTS, SLOT_DIM
 from .dynamics import DynamicsModel, PhysicsInformedDynamics, NUM_ACTIONS
+from .decoder import SlotDecoder
 
 
 class ModSTOVE(nn.Module):
@@ -57,9 +58,13 @@ class ModSTOVE(nn.Module):
     dynamics_action_dim: int = 32
     num_interaction_layers: int = 2
     use_physics_dynamics: bool = False
-    
+
+    # Decoder params
+    decoder_hidden_dim: int = 64
+    decoder_init_resolution: int = 8
+    decoder_output_resolution: int = 128
+
     # Training params
-    kl_weight: float = 0.001
     reconstruction_weight: float = 1.0
     dynamics_weight: float = 1.0
     
@@ -101,6 +106,14 @@ class ModSTOVE(nn.Module):
                 num_interaction_layers=self.num_interaction_layers,
                 name='dynamics'
             )
+
+        # Image decoder (spatial-broadcast, slot-attention style)
+        self.decoder = SlotDecoder(
+            output_resolution=self.decoder_output_resolution,
+            init_resolution=self.decoder_init_resolution,
+            hidden_dim=self.decoder_hidden_dim,
+            name='decoder',
+        )
     
     def encode(
         self,
@@ -134,6 +147,24 @@ class ModSTOVE(nn.Module):
         
         return slots, attn_weights, raw_slots
     
+    def decode(
+        self,
+        slots: jnp.ndarray,
+    ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        """
+        Decode slots to a reconstructed image via spatial-broadcast decoder.
+
+        Args:
+            slots: [B, num_slots, slot_dim]
+
+        Returns:
+            Tuple of:
+                - recon: [B, H, W, 3] alpha-composited RGB reconstruction
+                - masks: [B, num_slots, H, W, 1] per-slot softmaxed alpha masks
+                - rgb:   [B, num_slots, H, W, 3] per-slot RGB predictions
+        """
+        return self.decoder(slots)
+
     def predict_next(
         self,
         slots: jnp.ndarray,
@@ -222,7 +253,13 @@ class ModSTOVE(nn.Module):
         results['slots'] = slots
         results['attn_weights'] = attn_weights
         results['raw_slots'] = raw_slots
-        
+
+        # Decode slots to reconstructed image
+        recon, masks, slot_rgb = self.decode(slots)
+        results['recon'] = recon
+        results['masks'] = masks
+        results['slot_rgb'] = slot_rgb
+
         # Predict next slots if action provided
         if actions is not None:
             pred_next_slots = self.predict_next(slots, actions, deterministic)
@@ -247,77 +284,57 @@ class ModSTOVE(nn.Module):
         next_images: jnp.ndarray,
         prev_slots: Optional[jnp.ndarray] = None,
         deterministic: bool = False,
+        dyn_weight: float = 1.0,
     ) -> Tuple[jnp.ndarray, Dict[str, jnp.ndarray]]:
         """
         Compute training loss.
-        
-        ELBO-style objective:
-        L = L_dynamics + β * L_kl
-        
+
+        Reconstruction + dynamics objective (standard slot-attention recipe):
+            L = L_recon + dyn_weight * L_dynamics
+
         where:
-            L_dynamics: MSE between predicted and actual next slots
-            L_kl: KL divergence for slot initialization (approximated)
-        
+            L_recon:    MSE between decoded slots and the input image
+            L_dynamics: MSE between predicted and encoded next-frame slots
+
         Args:
             images: Current images [B, H, W, C]
             actions: Actions [B] or [B, num_actions]
             next_images: Next-frame images [B, H, W, C]
             prev_slots: Optional previous slots
             deterministic: If True, use deterministic mode
-            
+            dyn_weight: Scalar weight on the dynamics term (use a warmup
+                schedule from the training loop).
+
         Returns:
             Tuple of (total_loss, loss_dict)
         """
-        # Forward pass
         outputs = self(
-            images, 
-            actions=actions, 
+            images,
+            actions=actions,
             next_images=next_images,
             prev_slots=prev_slots,
-            deterministic=deterministic
+            deterministic=deterministic,
         )
-        
-        slots = outputs['slots']
+
+        recon = outputs['recon']
         pred_next_slots = outputs['pred_next_slots']
         next_slots = outputs['next_slots']
-        
-        # Dynamics loss: MSE between predicted and actual next slots
-        # Weight position/velocity higher than latent
-        pos_vel_weight = 10.0
-        
-        pred_pos_vel = pred_next_slots[..., :6]  # pos + vel
-        actual_pos_vel = next_slots[..., :6]
-        pos_vel_loss = jnp.mean((pred_pos_vel - actual_pos_vel) ** 2)
-        
-        pred_rest = pred_next_slots[..., 6:]  # size + latent
-        actual_rest = next_slots[..., 6:]
-        rest_loss = jnp.mean((pred_rest - actual_rest) ** 2)
-        
-        dynamics_loss = pos_vel_weight * pos_vel_loss + rest_loss
-        
-        # Slot regularization (encourage diversity)
-        slot_norm = jnp.mean(jnp.sum(slots ** 2, axis=-1))
-        
-        # Attention entropy (encourage spread)
-        attn = outputs['attn_weights']
-        attn_entropy = -jnp.mean(jnp.sum(attn * jnp.log(attn + 1e-8), axis=-1))
-        
-        # Total loss
+
+        recon_loss = jnp.mean((recon - images) ** 2)
+        dynamics_loss = jnp.mean((pred_next_slots - next_slots) ** 2)
+
         total_loss = (
-            self.dynamics_weight * dynamics_loss +
-            self.kl_weight * slot_norm -
-            0.01 * attn_entropy  # Maximize entropy
+            self.reconstruction_weight * recon_loss
+            + dyn_weight * dynamics_loss
         )
-        
+
         loss_dict = {
             'total_loss': total_loss,
+            'recon_loss': recon_loss,
             'dynamics_loss': dynamics_loss,
-            'pos_vel_loss': pos_vel_loss,
-            'rest_loss': rest_loss,
-            'slot_norm': slot_norm,
-            'attn_entropy': attn_entropy,
+            'dyn_weight': jnp.asarray(dyn_weight),
         }
-        
+
         return total_loss, loss_dict
 
 
@@ -374,10 +391,11 @@ def train_step(
     actions: jnp.ndarray,
     next_images: jnp.ndarray,
     rng: jax.random.PRNGKey,
+    dyn_weight: jnp.ndarray,
 ) -> Tuple[train_state.TrainState, Dict[str, jnp.ndarray]]:
     """
     Single training step.
-    
+
     Args:
         model: ModSTOVE model
         state: Current training state
@@ -385,7 +403,9 @@ def train_step(
         actions: Batch of actions [B]
         next_images: Batch of next images [B, H, W, C]
         rng: Random key
-        
+        dyn_weight: Scalar weight on the dynamics term (pass as a JAX scalar
+            so it can change across steps without re-jitting).
+
     Returns:
         Updated state and loss dictionary
     """
@@ -396,16 +416,17 @@ def train_step(
             actions=actions,
             next_images=next_images,
             deterministic=False,
+            dyn_weight=dyn_weight,
             method=model.loss,
             rngs={'sample': rng}
         )
         return loss, loss_dict
-    
+
     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
     (loss, loss_dict), grads = grad_fn(state.params)
-    
+
     state = state.apply_gradients(grads=grads)
-    
+
     return state, loss_dict
 
 
@@ -417,10 +438,11 @@ def eval_step(
     actions: jnp.ndarray,
     next_images: jnp.ndarray,
     rng: jax.random.PRNGKey,
+    dyn_weight: jnp.ndarray,
 ) -> Dict[str, jnp.ndarray]:
     """
     Evaluation step.
-    
+
     Args:
         model: ModSTOVE model
         state: Current training state
@@ -428,7 +450,8 @@ def eval_step(
         actions: Batch of actions
         next_images: Batch of next images
         rng: Random key
-        
+        dyn_weight: Scalar weight on the dynamics term.
+
     Returns:
         Loss dictionary
     """
@@ -438,10 +461,11 @@ def eval_step(
         actions=actions,
         next_images=next_images,
         deterministic=True,
+        dyn_weight=dyn_weight,
         method=model.loss,
         rngs={'sample': rng}
     )
-    
+
     return loss_dict
 
 

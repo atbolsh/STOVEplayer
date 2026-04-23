@@ -3,6 +3,7 @@ from .model import ModSTOVE, create_modstove, create_train_state, train_step, ev
 from .image_model import ImageEncoder, ImageEncoderWithNorm
 from .slot_encoder import SlotEncoder, TemporalSlotEncoder, POS_SLICE, VEL_SLICE, SIZE_SLICE, LATENT_SLICE, NUM_SLOTS, SLOT_DIM
 from .dynamics import DynamicsModel, PhysicsInformedDynamics, NUM_ACTIONS
+from .decoder import SlotDecoder
 
 __all__ = [
     'ModSTOVE',
@@ -16,6 +17,7 @@ __all__ = [
     'TemporalSlotEncoder',
     'DynamicsModel',
     'PhysicsInformedDynamics',
+    'SlotDecoder',
     'POS_SLICE',
     'VEL_SLICE',
     'SIZE_SLICE',

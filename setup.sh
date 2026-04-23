@@ -81,10 +81,13 @@ CUDAEOF
     echo
 fi
 
-# ── 5. Create checkpoint directory ────────────────────────────────
+# ── 5. Create checkpoint + image-dump directories ────────────────
 CKPT_DIR="${REPO_DIR}/checkpoints"
+IMG_DIR="${REPO_DIR}/images"
 mkdir -p "$CKPT_DIR"
+mkdir -p "$IMG_DIR"
 echo "Checkpoint directory: ${CKPT_DIR}"
+echo "Images directory:     ${IMG_DIR}"
 echo
 
 # ── Done ──────────────────────────────────────────────────────────

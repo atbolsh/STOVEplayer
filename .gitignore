@@ -3,5 +3,6 @@ __pycache__
 */__pycache__
 .env
 checkpoints
+images
 .ipynb_checkpoints
 nextPlayer.egg-info
