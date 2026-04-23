@@ -453,13 +453,14 @@ def main():
     """Entry point."""
     import argparse
     
+    _defaults = TrainConfig()
     parser = argparse.ArgumentParser(description="Pretrain modSTOVE")
-    parser.add_argument('--batch-size', type=int, default=36)
-    parser.add_argument('--clip-length', type=int, default=8)
-    parser.add_argument('--lr', type=float, default=2e-4)
-    parser.add_argument('--max-steps', type=int, default=100000)
-    parser.add_argument('--num-balls', type=int, default=5)
-    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--batch-size', type=int, default=_defaults.batch_size)
+    parser.add_argument('--clip-length', type=int, default=_defaults.clip_length)
+    parser.add_argument('--lr', type=float, default=_defaults.learning_rate)
+    parser.add_argument('--max-steps', type=int, default=_defaults.max_steps)
+    parser.add_argument('--num-balls', type=int, default=_defaults.num_balls)
+    parser.add_argument('--seed', type=int, default=_defaults.seed)
     args = parser.parse_args()
     
     config = TrainConfig(
