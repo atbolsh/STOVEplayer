@@ -327,11 +327,12 @@ def compute_loss(
     return total_loss, metrics
 
 
-@jax.jit
+@jax.jit(static_argnames=("model",))
 def train_step(
     state: train_state.TrainState,
     batch: BatchData,
     key: jax.random.PRNGKey,
+    *,
     model: ModSTOVE,
 ) -> Tuple[train_state.TrainState, dict]:
     """Single training step."""
@@ -396,7 +397,7 @@ def train(config: TrainConfig):
         batch = generate_batch(batch_key, env, config.batch_size, config.clip_length)
         
         # Train step
-        state, metrics = train_step(state, batch, step_key, model)
+        state, metrics = train_step(state, batch, step_key, model=model)
         
         # Logging
         if step % config.log_interval == 0:
