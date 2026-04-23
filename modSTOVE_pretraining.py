@@ -53,7 +53,7 @@ _SAMPLE_IMAGE_SEED = 20240423
 
 class TrainConfig(NamedTuple):
     """Training configuration."""
-    batch_size: int = 256
+    batch_size: int = 64
     clip_length: int = 8
     learning_rate: float = 2e-4
     lr_warmup_steps: int = 1000
